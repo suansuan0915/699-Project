@@ -1,0 +1,355 @@
+---
+title: "699 Project"
+output: html_document
+author: 'Wanyi Su'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<!-- #### Overview of ffdata #### -->
+
+
+### Import financil fraud dataset "ffdata"
+```{r}
+ffdata = read.csv('/Users/wanyi/Documents/ANLY699/ffdata.csv')
+```
+
+### Take an overview of "ffdata.csv"
+
+```{r}
+summary(ffdata)
+str(ffdata)
+head(ffdata)
+dim(ffdata)
+#6362620 observations, 11 variables
+colnames(ffdata)
+```
+
+
+
+<!-- #### Hypothesis #### -->
+
+#Fraud may happens most actively in some specific time periods.
+#Fraud is more related to some certain types of transactions.
+#The transaction amount and account balance may have a relationship with fraud behavior.
+#The current fraud threshold may not be that accurate.
+
+
+<!-- #### EDA Part #### -->
+
+### Check fraud transaction
+
+```{r}
+##Since isFlaggedFraud is classified by predefined threshold, we examine isFraud, which represents actual fraud transactions.
+library(dplyr)
+fraud_num = ffdata %>% count(isFraud)
+fraud_num
+fraud_pct = fraud_num$n[2]/(fraud_num$n[1]+fraud_num$n[2]) * 100
+fraud_pct #0.129% of transactions is actually fraud.
+##Plot the percentage of fraud/non-fraud transactions 
+barplot(prop.table(fraud_num$n) * 100, names.arg = c('not fraud' ,  'fraud'), ylab = 'Number of Transactions', main = "Fraud vs Not Fraud" ,col = 'grey' , ylim = c(0,100))
+
+```
+
+
+
+### Check fraud and time points
+
+```{r}
+##Since each step is 1-hour time unit, we learn that there're 743 steps, representing each hour in one month (31 days).
+library(ggplot2)
+library(grid)
+library(gridExtra)
+##Plot all transactions in all time points (steps)
+f1 = ggplot(ffdata, aes(x = step)) + 
+  geom_histogram(bins = 750,aes(fill = 'isFraud'), show.legend = FALSE) +
+  labs(title= 'Transactions at Different Steps', y = 'Number of transactions') + 
+  theme_classic()
+f1
+##Plot only fraud transactions in all time points (steps)
+f2 = ggplot(ffdata[ffdata$isFraud==1,], aes(x = step)) + 
+  geom_histogram(bins =750, aes(fill = 'isFraud'), show.legend = FALSE) +
+  labs(title= 'Fraud Transactions at Different Steps' , y = 'Number of Fraud transactions') +
+  theme_classic() 
+f2
+grid.arrange(f1, f2, ncol = 1, nrow = 2)
+#For all transactions, the number of transactions decreases after step 400.
+#However, for fraud transactions, the number doesn't show a deceasing trend as all transactions. The number of fraud transactions is stable during the whole period, while peaks at around step 200.
+
+##Further check fraud transactions in one day (24 steps/hours)
+#install.packages('numbers')
+library(numbers)
+ffdata$hour = mod(ffdata$step, 24) #assign 24-hour to steps
+##Plot all transactions in all time points in 24-hour format
+f3 = ggplot(ffdata, aes(x = hour)) + 
+  geom_bar(aes(fill = 'isFraud'), show.legend = FALSE) +
+  labs(title= 'Transactions at Different Hours', y = 'Number of transactions') + 
+  theme_classic()
+f3
+##Plot only fraud transactions in all time points in 24-hour format
+f4 = ggplot(ffdata[ffdata$isFraud==1,], aes(x = hour)) + 
+  geom_bar(aes(fill = 'isFraud'), show.legend = FALSE) +
+  labs(title= 'Fraud Transactions at Different Hours' , y = 'Number of Fraud transactions') +
+  theme_classic() 
+f4
+grid.arrange(f3, f4, ncol = 1, nrow = 2)
+#For all transactions in 24 hours, the number of transaction is low in the midnight and bottoms at early morning from 3am to 8am. But has a dramatically increasing trend after 8am and peaks at 19pm.
+#For fraud transactions in 24 hours, the number shows a similar trend with that in all steps.
+#In next steps, we may explore more about fraud in 24 hours.
+```
+
+
+
+
+### Examine transaction types with fraud
+
+```{r}
+##Distribution of transactions in different transaction types
+ggplot(ffdata, aes(x = type , fill = type)) + 
+  geom_bar() + 
+  labs(title = "Transactions of all Types",  x = 'Transaction Type' , y = 'Number of transactions' ) + 
+  theme_classic()
+
+##further in detail:
+fraud_tran_type = ffdata %>% 
+  group_by(type) %>% 
+  summarise(fraud_tran = sum(isFraud))
+fraud_tran_type
+
+ffdata %>%
+  group_by(type) %>% 
+  summarise(fraud_tran = sum(isFraud)) %>%
+  ggplot(aes(x = type,  y = fraud_tran)) +
+  geom_bar(stat = 'identity', colour='black') +
+  labs(title = 'Fraud Transactions of all Types', x = 'Transcation type', y = 'Number of Fraud Transactions') + 
+  geom_text(aes(label = fraud_tran)) + 
+  theme_classic()
+#Only "CASH_OUT" and "TRANSFER" transaction types have fraud transactions. Both are related to transactions involving taking out money from one account to another account.
+#Thus, filtering observations to contain only these two types.
+```
+
+## Filter data to only include "CASH_OUT" and "TRANSFER" type data
+
+```{r}
+ffdata_filtered = ffdata[ffdata$type == c('CASH_OUT', 'TRANSFER'), ]
+head(ffdata_filtered)
+summary(ffdata_filtered)
+dim(ffdata_filtered)
+
+```
+
+
+
+## Check any insights with missing Value & amount & balances of fraud transaction
+```{r}
+##Check if any null values in the dataset
+library(naniar)
+miss_var_summary(ffdata)
+#There's no NA. But there are some 0 values in banlance variables. These 0 values can indicate fraud, so we leave these values as they are.
+
+##Here, we only check fraud transactions
+##Check amount of fraud transactions
+ggplot(ffdata_filtered[ffdata_filtered$isFraud==1, ], aes(x = amount,  fill =amount)) +
+  geom_histogram(aes(fill = 'amount')) + 
+  labs(title = 'Fraud transaction Amount distribution', y = 'Number of Fraud transactions', x = 'Amount') 
+#The distribution of fraud transaction amount is positively skewed, which means most fraud transactions are shown in small amount of money below 2500000. And we noticed that most are in 0 amount (agree with previous step finding that 0 amount transactions are questionable!).
+
+ggplot(ffdata_filtered[ffdata_filtered$isFraud==1, ], aes(x = oldbalanceOrg,  fill =oldbalanceOrg)) +
+  geom_histogram(aes(fill = 'oldbalanceOrg')) + 
+  labs(title = 'Fraud transaction oldbalanceOrg distribution', y = 'Number of Fraud transactions', x = 'oldbalanceOrg') 
+#The distribution of old balance in original account is also skewed.
+#Similarly, the same distribution to old/new balances in original/destination account.
+
+##Check old balances of fraud transactions
+##Since our balance data is extremely skewed and has some 0 values, we do log(1+x) to standardize it before plot it.
+ggplot(ffdata_filtered, aes(x = factor(isFraud) ,y = log1p(oldbalanceOrg), fill = factor(isFraud))) + 
+  geom_boxplot() +
+  labs(title= 'Boxplot of Old balance-Original Accounts' , x = 'isFraud') +  
+  theme_classic()
+
+ggplot(ffdata_filtered, aes(x = factor(isFraud) ,y = log1p(oldbalanceDest), fill = factor(isFraud))) + 
+  geom_boxplot() +
+  labs(title= 'Boxplot of Old balance-Destination Accounts' , x = 'isFraud') +  
+  theme_classic()
+
+ggplot(ffdata_filtered, aes(x = factor(isFraud) ,y = log1p(newbalanceDest), fill = factor(isFraud))) + 
+  geom_boxplot() +
+  labs(title= 'Boxplot of New balance-Destination Accounts' , x = 'isFraud') +  
+  theme_classic()
+
+#We can conclude that: 
+#For fraud transaction, old balance in original accounts are higher than that of non-fraud transactions. Old balance in destination accounts are low than that of non-fraud transactions, and most destination accounts involved in fraud have a low balance.
+#Most fraud transactions is about transfering wealth from a wealthier account to a less wealthy account, and after fraud, most destination accounts keep a more similar balance level than before.
+
+```
+
+
+
+<!-- Data & Feature Preprocessing Part -->
+
+```{r}
+##In the previous step, we filter data to only include "CASH_OUT" and "TRANSFER" types:
+ffdata_filtered = ffdata[ffdata$type == c('CASH_OUT', 'TRANSFER'), ]
+
+##Based on dataset with only "CASH_OUT" and "TRANSFER" type data in previous step:
+##Remove unrelated features "nameOrig" and "nameDest", then remove "steps" (since we want to dive into fraud behavior & day hours and we have new variable "hour"). Then we remove "isFlaggedFraud" (since it's a predefined threshold and is not that accurate in predicting fraud).
+colnames(ffdata_filtered) 
+ffdata_mdl = subset(ffdata_filtered, select = -c(1, 4, 7, 11))
+
+##Set "isFraud" as dependent variable, factorize it
+ffdata_mdl$isFraud = as.factor(ffdata_filtered$isFraud)
+colnames(ffdata_mdl)
+head(ffdata_mdl$isFraud)
+
+##Since "type" is a categorical variable, we use one-hot encoding to encode "type" as dummy variable.
+#install.packages('dummies')
+library(dummies)
+ffdata_mdl = dummy.data.frame(ffdata_mdl, names= c('type'), sep='.')
+head(ffdata_mdl)
+
+##Thus, we get a dataset for modeling ("ffdata_mdl")
+
+##Check correlation between features
+#install.packages("ggcorrplot") 
+library(ggcorrplot)
+corr = round(cor(ffdata_mdl[,c(1:7,9)]), 2)
+corr
+ggcorrplot(corr, type = 'upper', outline.col = 'white', p.mat = p.mat) #plot heatmap
+p.mat = round(cor_pmat(ffdata_mdl[,c(1:7,9)]), 2)
+p.mat
+#Apart from some balance features (p.mat<0.05, cor>0.5), all other features pass correlation test. Gennerally, multicollinearity doesn't matter for our research here. 
+#Since our purpose is to do prediction, we keep all features for modeling.
+```
+
+
+
+
+<!-- Modeling Part -->
+
+### Split dataset
+
+```{r}
+##Split to to 90% training and 10% testing data.. (see webpage)
+#install.packages('caTools')
+library(caTools)
+set.seed(123)
+smp = sample.split(ffdata_mdl$isFraud, SplitRatio = 0.9)
+train = ffdata_mdl[smp==TRUE, ]
+test = ffdata_mdl[smp==FALSE, ]
+head(train)
+dim(train) #1246828 rows, 9 columns
+dim(test) #138536 rows, 9 columns
+#new dataset for modeling has 9 variables.
+```
+
+
+
+### Logistic Regression
+
+```{r}
+##train logistic regression model
+lr_model = glm(isFraud~., data = train, family = 'binomial')
+exp(coef(lr_model))
+summary(lr_model)
+#predict on test dataset
+lr_prob = predict(lr_model, test, type = 'response')
+
+#Plot ROC curve
+#install.packages('ROCR')
+library(ROCR)
+prediction = prediction(lr_prob, test$isFraud)
+perform = performance(prediction, "tpr", "fpr")
+plot(perform)
+#calculate AUC
+performance(prediction, 'auc')@y.values[[1]] #area under curve is 0.9814
+
+##Confusion Matrix and ratios
+lr_pred = rep('0', 138536)
+lr_pred[lr_prob>0.5]='1'
+lr_confusion = table(lr_pred, test$isFraud)
+lr_confusion
+##accuracy rate
+paste0('Accuracy ratio is: ', mean(lr_pred==test$isFraud)) #0.998282
+#same with: (138114+184)/(138114+184+20+218)
+##recall rate
+lr_recall = 138114/(138114+20)
+paste0('recall ratio is: ', lr_recall) #0.99985
+```
+
+
+
+### Decision Tree
+
+```{r}
+#install.packages("rpart.plot")
+library(rpart)
+library(rpart.plot)
+## Train model
+dt_model <- rpart(isFraud~., data = train) #, method = 'class')
+rpart.plot(dt_model, extra = 106)
+## Predit
+dt_pred = predict(dt_model, test) #, type = 'class')
+
+## Confusion matrix
+dt_confusion = table(test$isFraud, predict(dt_model, test, type = 'class'))
+dt_confusion
+##accuracy rate
+paste0('Accuracy ratio is: ', mean(predict(dt_model, test, type = 'class') ==test$isFraud)) #accuracy rate is 0.9989
+##recall
+dt_recall = 138124/(138124+140) #0.9990
+paste0('Recall ratio is: ', dt_recall)
+
+##plot ROC curve
+#install.packages('pROC')
+library(pROC)
+dt_prob = predict(dt_model, test, type = 'prob')
+dt_prediction = prediction(predict(dt_model, test, type = 'prob')[,2], test$isFraud)
+plot(performance(dt_prediction, "tpr", "fpr"))
+#calculate AUC
+performance(dt_prediction, "auc")@y.values[[1]] #area under curve is 0.8731377
+```
+
+
+
+### Random Forest
+
+```{r}
+#install.packages('randomForest')
+library(randomForest)
+## Training the model
+set.seed(12345)
+rf_classifier = randomForest(isFraud ~ ., data=train, ntree=20, mtry=2, importance=TRUE)
+rf_classifier
+plot(rf_classifier)
+
+## Feature importance
+importance_matrix = data.frame(Variables = rownames(rf_classifier$importance), rf_classifier$importance, row.names = NULL)
+importance_matrix
+##plot feature importance
+ggplot(data = importance_matrix , aes(y = MeanDecreaseGini , x = Variables, fill = Variables))+ geom_col() + coord_flip() + labs(title= 'Variable importance plot')+ theme_classic()
+
+## Predict
+rf_pred = predict(rf_classifier, newdata = test)
+
+##Confusion matrix
+rf_confusion = confusionMatrix(rf_pred, test$isFraud )
+print(confusion)
+##recall
+#proportion of actual positives was identified correctly.
+#recall = TP/(TP+FN)
+rf_recall = 1342023/(1342023+954)
+paste0('recall rate is:', rf_recall) #0.9992
+
+#AUC curve
+rf_prob = predict(rf_classifier, test, type = 'prob')
+rf_prediction = prediction(predict(rf_classifier, test, type = 'prob')[,2], test$isFraud)
+plot(performance(rf_prediction, "tpr", "fpr"))
+#calculate AUC
+performance(rf_prediction, "auc")@y.values[[1]] #area under curve is 0.9362
+
+```
+
+
+
